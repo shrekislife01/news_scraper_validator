@@ -12,8 +12,8 @@ from collections import Counter
 
 TAG_HREF_PATTERNS = re.compile(r'/(tag|cimke|category|tema|topics)/', re.IGNORECASE)
 
-from formatter import OutputFormatterHU
-from parser import SoupParser
+from src.extractor.formatter import OutputFormatterHU
+from src.extractor.parser import SoupParser
 
 class NewsExtractor:
     def __init__(self, html, url):

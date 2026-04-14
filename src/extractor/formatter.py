@@ -2,7 +2,7 @@ from html import unescape
 import re
 import logging
 
-from parser import SoupParser
+from src.extractor.parser import SoupParser
 
 log = logging.getLogger(__name__)
 
