@@ -48,3 +48,5 @@ data/exports/
 
 docker-compose.override.yml
 *.pid
+
+html_cache/*
