@@ -1,7 +1,3 @@
-# ---------------------------------------------------------------------------
-# Stílusok
-# ---------------------------------------------------------------------------
-
 COLORS = {
     "bg": "#f8f9fa",
     "card": "#ffffff",
@@ -65,10 +61,6 @@ DOT_STYLE_BASE = {
     "marginLeft": "12px",
 }
 
-# ---------------------------------------------------------------------------
-# Validációs stílusok
-# ---------------------------------------------------------------------------
-
 VAL_SECTION_STYLE = {
     **CARD_STYLE,
     "borderLeft": f"4px solid {COLORS['primary']}",
@@ -113,4 +105,19 @@ VAL_SAVE_BTN_STYLE = {
     "cursor": "pointer",
     "fontWeight": "600",
     "fontSize": "14px",
+}
+
+RULES_CARD_STYLE = {
+    **CARD_STYLE,
+    "borderLeft": f"4px solid {COLORS['primary']}",
+}
+
+RULE_ROW_STYLE = {
+    "padding": "8px 0",
+    "borderBottom": f"1px solid {COLORS['border']}",
+    "fontSize": "13px",
+    "display": "flex",
+    "gap": "8px",
+    "alignItems": "flex-start",
+    "flexWrap": "wrap",
 }

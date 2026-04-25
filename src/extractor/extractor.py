@@ -16,12 +16,30 @@ from src.extractor.formatter import OutputFormatterHU
 from src.extractor.parser import SoupParser
 
 class NewsExtractor:
-    def __init__(self, html, url):
+    def __init__(self, html, url, css_overrides: dict | None = None):
         self.url = url
         self.html = html
         self.soup = BeautifulSoup(html, 'html.parser')
         self.domain = urlparse(url).netloc
+        self._overrides: dict[str, str] = css_overrides or {}
+        self._trace: dict[str, dict] = {}
         self.article_root = self.locate_article_root()
+
+    def _try_css_override(self, scope: str) -> str | None:
+        """tries CSS override rule on the scope"""
+        selector = self._overrides.get(scope)
+        if not selector:
+            return None
+        try:
+            el = self.soup.select_one(selector)
+            if el:
+                text = el.get_text(strip=True)
+                if text:
+                    self._trace[scope] = {"source": "css_override", "selector": selector}
+                    return text
+        except Exception:
+            pass
+        return None
 
     def extract(self, with_kw = False):
         if with_kw:
@@ -67,21 +85,29 @@ class NewsExtractor:
         return best_node
     
     def get_title(self):
+        override = self._try_css_override("title")
+        if override:
+            return override
+
         og_title = self.soup.find('meta', property='og:title') or self.soup.find('meta', attrs={'name': 'og:title'})
-        
+
         if og_title:
             og_text = og_title['content'].strip() if og_title and og_title.get('content') else ''
-
+            self._trace["title"] = {"source": "og_meta", "selector": "meta[property=og:title]"}
             return og_text
-            
+
         title_tag = self.soup.find('title')
         h1_tags = self.soup.find_all('h1')
 
         title_text = title_tag.get_text(strip=True) if title_tag else ''
+        og_text = ''
         h1_text = max((h.get_text(strip=True) for h in h1_tags), key=len, default='') if h1_tags else ''
 
         candidates = [h1_text, og_text, title_text]
-        return max(candidates, key=len) if candidates else ''
+        best = max(candidates, key=len) if candidates else ''
+        source = "h1" if best == h1_text else ("title_tag" if best == title_text else "unknown")
+        self._trace["title"] = {"source": source, "selector": None}
+        return best
 
     def score_node(self, node):
         paragraphs = node.find_all('p')
@@ -152,10 +178,14 @@ class NewsExtractor:
         return '\n\n'.join(paragraphs)
         
     def get_author(self):
+        override = self._try_css_override("author")
+        if override:
+            return override
+
         if not self.domain == 'mandiner.hu':
             meta = self.soup.find('meta', attrs={'name': 'author'})
             if meta and meta.get('content'):
-                print("Got author from meta")
+                self._trace["author"] = {"source": "meta_author", "selector": "meta[name=author]"}
                 return meta['content'].strip()
             main_soup = self.soup
             #if self.article_root:
@@ -181,12 +211,15 @@ class NewsExtractor:
             
                     # Filter out irrelevant or overly long content
                     if text and len(text.split()) <= 10:
+                        cls_name = ' '.join(tag.get('class', []))
+                        self._trace["author"] = {"source": "class_based", "selector": f".{cls_name.split()[0]}" if cls_name else None}
                         return text.split(',')[0].strip()
-        
+
                 # Fallback for common class names: get first direct text if no child matches
                 text = tag.get_text(separator=' ', strip=True)
                 if text and len(text.split()) <= 10:
-                    #print("Got author from common class, direct text")
+                    cls_name = ' '.join(tag.get('class', []))
+                    self._trace["author"] = {"source": "class_direct", "selector": f".{cls_name.split()[0]}" if cls_name else None}
                     return text.split(',')[0].strip()
     
             # fallback: link-based detection
@@ -194,7 +227,7 @@ class NewsExtractor:
                 href = a['href'].lower()
                 classes = ' '.join(a.get('class', [])).lower()
                 if any(k in href or k in classes for k in keywords):
-                    #print("Got author from link-based detection")
+                    self._trace["author"] = {"source": "link_based", "selector": f"a[href*=author]"}
                     return a.get_text(strip=True)
     
             # Origo/JS-based (window._ain)
@@ -208,8 +241,10 @@ class NewsExtractor:
                             ain = json.loads(json_str)
                             author = ain.get("authors")
                             if isinstance(author, list):
-                                #print("Got author from JS based stuff")
+                                self._trace["author"] = {"source": "js_window_ain", "selector": "script[window._ain]"}
                                 return ', '.join(author)
+                            if author:
+                                self._trace["author"] = {"source": "js_window_ain", "selector": "script[window._ain]"}
                             return author
                         except json.JSONDecodeError:
                             pass
@@ -224,19 +259,19 @@ class NewsExtractor:
                     if item.get("@type") == "NewsArticle":
                         author_info = item.get("author")
                         if isinstance(author_info, dict):
-                            #print("Got author from Mandiner JSON-LD (single)")
+                            self._trace["author"] = {"source": "json_ld", "selector": "script.structured-data[type=application/ld+json]"}
                             return author_info.get("name", "").strip()
                         elif isinstance(author_info, list):
                             names = [a.get("name", "").strip() for a in author_info if "name" in a]
                             if names:
-                                #print("Got author from Mandiner JSON-LD (multi)")
+                                self._trace["author"] = {"source": "json_ld", "selector": "script.structured-data[type=application/ld+json]"}
                                 return ", ".join(names)
             except json.JSONDecodeError:
                 pass
                 
         return None
 
-    def get_publish_date(self):
+    def get_publish_date(self):  # noqa: C901
         """3 strategies for publishing date extraction. The strategies
         are descending in accuracy and the next strategy is only
         attempted if a preferred one fails.
@@ -259,11 +294,21 @@ class NewsExtractor:
         DATE_REGEX = r'([\./\-_]{0,1}(19|20)\d{2})[\./\-_]{0,1}(([0-3]{0,1}[0-9][\./\-_])|(\w{3,5}[\./\-_]))([0-3]{0,1}[0-9][\./\-]{0,1})?'
         STRICT_DATE_REGEX = _STRICT_DATE_REGEX_PREFIX + DATE_REGEX
         
+        override = self._try_css_override("date")
+        if override:
+            try:
+                parsed = parse_date_str(override)
+                if parsed:
+                    return parsed
+            except Exception:
+                pass
+
         date_match = re.search(STRICT_DATE_REGEX, self.url)
         if date_match:
             date_str = date_match.group(0)
             datetime_obj = parse_date_str(date_str)
             if datetime_obj:
+                self._trace["date"] = {"source": "url_regex", "selector": None}
                 return datetime_obj
 
         PUBLISH_DATE_TAGS = [
@@ -296,10 +341,13 @@ class NewsExtractor:
                 content = elements[0].get(tag_config['content'])
                 if content:
                     try:
-                        return parse_date(content)
+                        dt = parse_date(content)
+                        self._trace["date"] = {"source": "meta_tag", "selector": f"meta[{tag_config['attribute']}={tag_config['value']}]"}
+                        return dt
                     except Exception:
                         continue
 
+        self._trace.setdefault("date", {"source": "not_found", "selector": None})
         return None
 
     def get_keywords(self):
@@ -307,7 +355,7 @@ class NewsExtractor:
         soup = self.soup
         keywords = set()
 
-        # ========== TELEX ==========
+        # only telex
         # In head: <meta name="article:tag" content="...">
         if dom == "telex.hu":
             head = soup.head or soup
@@ -324,7 +372,7 @@ class NewsExtractor:
                         if kw:
                             keywords.add(kw)
 
-        # ========== BLIKK / 444 / 24 / INDEX / HVG / KISKEGYED ==========
+        # BLIKK,444,24,INDEX,HVG,KISKEGYED
         # In head: <meta name="keywords" content="...">
         elif dom in {
             "blikk.hu",
@@ -343,7 +391,7 @@ class NewsExtractor:
                         if kw:
                             keywords.add(kw)
 
-        # ========== ORIGO ==========
+        # ORIGo
         # In <app-root>: <a class="tag" href="/sport/cimke/...">Text</a>
         elif dom == "origo.hu":
             root = soup.find("app-root") or soup
@@ -359,7 +407,7 @@ class NewsExtractor:
                     if text:
                         keywords.add(text)
 
-        # ========== BORSONLINE ==========
+        # BORSONLINE
         # In app route: <div class="tags-wrapper"><a class="tag" ...>Text</a>...</div>
         elif dom == "borsonline.hu":
             root = soup.find("app-root") or soup
@@ -370,7 +418,7 @@ class NewsExtractor:
                     if text:
                         keywords.add(text)
 
-        # ========== MANDINER ==========
+        # MANDINER
         # In <app-root>: <div class="trending-topics"><a class="trending-topics-topic" ...>Text</a>...</div>
         elif dom == "mandiner.hu":
             root = soup.find("app-root") or soup
@@ -379,7 +427,7 @@ class NewsExtractor:
                 if text:
                     keywords.add(text)
 
-        # ========== PORTFOLIO ==========
+        # PORTFOLIO
         # <ul class="tags"><li>Címkék:</li><li><a href="/cimke/...">Text</a></li>...</ul>
         elif dom == "portfolio.hu":
             root = soup
@@ -390,7 +438,7 @@ class NewsExtractor:
                     if txt:
                         keywords.add(txt)
 
-        # ========== PAPAGENO ==========
+        # PAPAGENO
         # <script type="application/ld+json" class="yoast-schema-graph">{"@graph":[{"@type":"Article", "keywords":[...]}]}</script>
         elif dom == "papageno.hu":
             for script in soup.find_all("script", {
@@ -418,7 +466,7 @@ class NewsExtractor:
                 except Exception:
                     continue
 
-        # ========== GENERIC FALLBACK (other domains) ==========
+        # GENERIC FALLBACK (other domains)
         else:
             # 1) meta keywords in head
             head = soup.head or soup

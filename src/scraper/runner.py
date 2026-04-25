@@ -8,6 +8,7 @@ from enum import Enum
 
 from src.extractor.extractor import NewsExtractor
 from src.scraper.fetcher import fetch, FetchErrorCategory
+from src.rules.model import PipelineResult
 
 
 class ExtractionStatus(str, Enum):
@@ -108,3 +109,111 @@ def run_test(url: str, with_keywords: bool = True) -> TestRun:
         error_detail=None,
         duration_ms=elapsed_ms(),
     )
+
+
+def run_test_with_rules(url: str, with_keywords: bool = True) -> PipelineResult:
+    """
+    Full pipeline: HTML save → CSS override → extraction → post-processing rules
+    """
+    from src.rules.engine import RuleEngine
+    from src.rules.storage import save_html_cache
+    from src.extractor.extractor import NewsExtractor
+    from urllib.parse import urlparse
+
+    url = (url or "").strip()
+    start = time.perf_counter()
+
+    def elapsed_ms():
+        return round((time.perf_counter() - start) * 1000, 1)
+
+    def _error_pipeline(error_category, error_detail):
+        d = dataclasses.asdict(TestRun(
+            url=url,
+            status=ExtractionStatus.FAILED,
+            error_category=error_category,
+            error_detail=error_detail,
+            duration_ms=elapsed_ms(),
+        ))
+        return PipelineResult(
+            original_run=d, modified_run=d, applied=[],
+            rules_ran=0, rules_changed=0,
+            ran_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    if not url or not url.startswith(("http://", "https://")):
+        return _error_pipeline(FetchErrorCategory.INVALID_URL, "Az URL-nek http:// vagy https:// sémával kell kezdődnie.")
+
+    fetch_result = fetch(url)
+    if fetch_result.error_category is not None:
+        return _error_pipeline(fetch_result.error_category, fetch_result.error_detail)
+
+    html = fetch_result.html or ""
+    domain = urlparse(url).netloc
+
+    try:
+        engine = RuleEngine.from_directory()
+        css_overrides = engine.get_css_overrides(domain)
+    except Exception:
+        engine = None
+        css_overrides = {}
+
+    # Extraction
+    try:
+        extractor = NewsExtractor(html, url, css_overrides=css_overrides)
+        result = extractor.extract(with_kw=with_keywords)
+        trace = dict(extractor._trace)
+    except Exception as e:
+        return _error_pipeline("PARSE_ERROR", str(e))
+
+    # TestRun
+    raw_date = result.get("date")
+    date_str = str(raw_date) if raw_date is not None else None
+    main_fields = [result.get("title"), result.get("text"), result.get("author"), raw_date]
+    filled = [f for f in main_fields if f]
+    if len(filled) == len(main_fields):
+        status = ExtractionStatus.SUCCESS
+    elif filled:
+        status = ExtractionStatus.PARTIAL
+    else:
+        status = ExtractionStatus.FAILED
+
+    test_run = TestRun(
+        url=url,
+        title=result.get("title") or None,
+        text=result.get("text") or None,
+        author=result.get("author") or None,
+        date=date_str,
+        keywords=result.get("keywords") or [],
+        page=result.get("page") or None,
+        status=status,
+        duration_ms=elapsed_ms(),
+    )
+
+    # HTML saves in cache
+    try:
+        html_cache_key = save_html_cache(html, url)
+    except Exception:
+        html_cache_key = None
+
+    # Post-processing rules
+    if engine is not None:
+        try:
+            pipeline_result = engine.apply(test_run)
+        except Exception:
+            d = dataclasses.asdict(test_run)
+            pipeline_result = PipelineResult(
+                original_run=d, modified_run=d, applied=[],
+                rules_ran=0, rules_changed=0,
+                ran_at=datetime.now(timezone.utc).isoformat(),
+            )
+    else:
+        d = dataclasses.asdict(test_run)
+        pipeline_result = PipelineResult(
+            original_run=d, modified_run=d, applied=[],
+            rules_ran=0, rules_changed=0,
+            ran_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    pipeline_result.html_cache_key = html_cache_key
+    pipeline_result.extraction_trace = trace
+    return pipeline_result
