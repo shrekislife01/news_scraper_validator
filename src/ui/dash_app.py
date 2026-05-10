@@ -16,7 +16,6 @@ import dataclasses as _dc
 
 from src.rules import (
     RuleScope,
-    RuleAction,
     make_rule,
     save_rule,
     load_rule,
@@ -180,6 +179,43 @@ def _build_rules_table() -> list:
 _TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 _TAB_SELECTED = {**_TAB_STYLE, "borderTop": f"3px solid {COLORS['primary']}", "color": COLORS["primary"]}
 
+def _stepper(active_step: int, rules_ready: bool) -> html.Div:
+    """Render a two-step progress bar. active_step: 1 or 2."""
+    def _step(n, label, done, active):
+        if done and not active:
+            circle_bg, circle_color, label_color = COLORS["success"], "#fff", COLORS["success"]
+            circle_text = "✓"
+        elif active:
+            circle_bg, circle_color, label_color = COLORS["primary"], "#fff", COLORS["primary"]
+            circle_text = str(n)
+        else:
+            circle_bg, circle_color, label_color = COLORS["border"], COLORS["muted"], COLORS["muted"]
+            circle_text = str(n)
+        return html.Div(style={"display": "flex", "alignItems": "center", "gap": "8px"}, children=[
+            html.Div(circle_text, style={
+                "width": "28px", "height": "28px", "borderRadius": "50%",
+                "background": circle_bg, "color": circle_color,
+                "display": "flex", "alignItems": "center", "justifyContent": "center",
+                "fontWeight": "700", "fontSize": "13px", "flexShrink": "0",
+            }),
+            html.Span(label, style={"fontWeight": "600", "fontSize": "14px", "color": label_color}),
+        ])
+
+    connector_color = COLORS["success"] if rules_ready else COLORS["border"]
+    return html.Div(
+        style={
+            **CARD_STYLE,
+            "display": "flex", "alignItems": "center", "gap": "12px",
+            "marginBottom": "20px", "padding": "14px 20px",
+        },
+        children=[
+            _step(1, "Szabályok konfigurálása", done=rules_ready, active=(active_step == 1)),
+            html.Div(style={"flex": "1", "height": "2px", "background": connector_color, "borderRadius": "1px"}),
+            _step(2, "Kinyerés és validáció", done=False, active=(active_step == 2)),
+        ],
+    )
+
+
 app.layout = html.Div(
     style={
         "background": COLORS["bg"],
@@ -199,85 +235,14 @@ app.layout = html.Div(
             style={"color": COLORS["muted"], "marginBottom": "20px"},
         ),
 
+        html.Div(id="stepper-bar"),
+
         dcc.Tabs(
             id="main-tabs",
-            value="tab-extract",
+            value="tab-rules",
             children=[
                 dcc.Tab(
-                    label="Kinyerés",
-                    value="tab-extract",
-                    style=_TAB_STYLE,
-                    selected_style=_TAB_SELECTED,
-                    children=[html.Div(style={"paddingTop": "16px"}, children=[
-                        # Input kártya
-                        html.Div(style=CARD_STYLE, children=[
-                            html.Div(
-                                style={"display": "flex", "gap": "10px", "alignItems": "center"},
-                                children=[
-                                    dcc.Input(
-                                        id="url-input", type="url",
-                                        placeholder="https://hirportal.hu/...",
-                                        debounce=False,
-                                        style={
-                                            "flex": "1", "padding": "10px 14px",
-                                            "fontSize": "14px",
-                                            "border": f"1px solid {COLORS['border']}",
-                                            "borderRadius": "6px", "outline": "none",
-                                        },
-                                    ),
-                                    html.Button(
-                                        "Kinyerés", id="extract-btn", n_clicks=0,
-                                        style={
-                                            "padding": "10px 22px",
-                                            "background": COLORS["primary"], "color": "#fff",
-                                            "border": "none", "borderRadius": "6px",
-                                            "cursor": "pointer", "fontWeight": "600",
-                                            "fontSize": "14px", "whiteSpace": "nowrap",
-                                        },
-                                    ),
-                                ],
-                            ),
-                            dcc.Loading(
-                                id="loading", type="circle", color=COLORS["primary"],
-                                children=html.Div(id="loading-anchor", style={"height": "4px"}),
-                            ),
-                        ]),
-
-                        html.Div(id="results-section"),
-                        html.Div(id="rules-applied-section"),
-
-                        html.Div(id="validation-section", style={"display": "none"}, children=[
-                            html.Div(style=VAL_SECTION_STYLE, children=[
-                                html.Div(
-                                    style={"display": "flex", "alignItems": "center", "gap": "16px", "marginBottom": "16px"},
-                                    children=[
-                                        html.H2("Validáció", style={"margin": "0", "fontSize": "18px", "color": COLORS["text"]}),
-                                        html.Div(id="val-score-display", children=score_badge(None)),
-                                    ],
-                                ),
-                                *[val_field_row(f) for f in VALIDATED_FIELDS],
-                                html.Div(style={"marginTop": "16px"}, children=[
-                                    html.Label("Összesített megjegyzés", style={**LABEL_STYLE, "display": "block", "marginBottom": "6px"}),
-                                    dcc.Textarea(
-                                        id="val-overall-comment",
-                                        placeholder="Általános észrevételek...",
-                                        style={**VAL_TEXTAREA_STYLE, "width": "100%", "minHeight": "80px", "boxSizing": "border-box"},
-                                    ),
-                                ]),
-                                html.Div(
-                                    style={"marginTop": "16px", "display": "flex", "alignItems": "center", "gap": "16px"},
-                                    children=[
-                                        html.Button("Mentés", id="val-save-btn", n_clicks=0, style=VAL_SAVE_BTN_STYLE),
-                                        html.Div(id="val-save-status"),
-                                    ],
-                                ),
-                            ]),
-                        ]),
-                    ])],
-                ),
-
-                dcc.Tab(
-                    label="Szabályok",
+                    label="1. Szabályok",
                     value="tab-rules",
                     style=_TAB_STYLE,
                     selected_style=_TAB_SELECTED,
@@ -384,6 +349,61 @@ app.layout = html.Div(
                             ),
                             html.Div(id="rules-table", children=_build_rules_table()),
                         ]),
+
+                        # ── Tovább gomb ──
+                        html.Div(
+                            style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginTop": "8px"},
+                            children=[
+                                html.Div(id="rules-proceed-hint", style={"fontSize": "13px", "color": COLORS["muted"]}),
+                                html.Button(
+                                    "Tovább a kinyeréshez →",
+                                    id="proceed-to-extract-btn", n_clicks=0,
+                                    style={**VAL_SAVE_BTN_STYLE, "background": COLORS["success"], "display": "none"},
+                                ),
+                            ],
+                        ),
+                    ])],
+                ),
+
+                dcc.Tab(
+                    label="2. Kinyerés",
+                    value="tab-extract",
+                    style=_TAB_STYLE,
+                    selected_style=_TAB_SELECTED,
+                    children=[html.Div(style={"paddingTop": "16px"}, children=[
+
+                        html.Div(id="extract-gate"),
+
+                        html.Div(id="results-section"),
+                        html.Div(id="rules-applied-section"),
+
+                        html.Div(id="validation-section", style={"display": "none"}, children=[
+                            html.Div(style=VAL_SECTION_STYLE, children=[
+                                html.Div(
+                                    style={"display": "flex", "alignItems": "center", "gap": "16px", "marginBottom": "16px"},
+                                    children=[
+                                        html.H2("Validáció", style={"margin": "0", "fontSize": "18px", "color": COLORS["text"]}),
+                                        html.Div(id="val-score-display", children=score_badge(None)),
+                                    ],
+                                ),
+                                *[val_field_row(f) for f in VALIDATED_FIELDS],
+                                html.Div(style={"marginTop": "16px"}, children=[
+                                    html.Label("Összesített megjegyzés", style={**LABEL_STYLE, "display": "block", "marginBottom": "6px"}),
+                                    dcc.Textarea(
+                                        id="val-overall-comment",
+                                        placeholder="Általános észrevételek...",
+                                        style={**VAL_TEXTAREA_STYLE, "width": "100%", "minHeight": "80px", "boxSizing": "border-box"},
+                                    ),
+                                ]),
+                                html.Div(
+                                    style={"marginTop": "16px", "display": "flex", "alignItems": "center", "gap": "16px"},
+                                    children=[
+                                        html.Button("Mentés", id="val-save-btn", n_clicks=0, style=VAL_SAVE_BTN_STYLE),
+                                        html.Div(id="val-save-status"),
+                                    ],
+                                ),
+                            ]),
+                        ]),
                     ])],
                 ),
             ],
@@ -392,8 +412,92 @@ app.layout = html.Div(
         dcc.Store(id="run-result-store",      storage_type="memory"),
         dcc.Store(id="pipeline-result-store", storage_type="memory"),
         dcc.Store(id="suggestions-store",     storage_type="memory", data=[]),
+        dcc.Store(id="rules-count-store",     storage_type="memory", data=len(list_rules())),
     ],
 )
+
+
+@callback(
+    Output("rules-count-store", "data"),
+    Input("rules-table", "children"),
+)
+def sync_rules_count(_):
+    return len(list_rules())
+
+
+@callback(
+    Output("stepper-bar", "children"),
+    Output("proceed-to-extract-btn", "style"),
+    Output("rules-proceed-hint", "children"),
+    Input("rules-count-store", "data"),
+)
+def update_stepper_and_proceed(count):
+    rules_ready = bool(count)
+    stepper = _stepper(1, rules_ready)
+    btn_style = {**VAL_SAVE_BTN_STYLE, "background": COLORS["success"], "display": "inline-block" if rules_ready else "none"}
+    hint = "" if rules_ready else "Legalább egy szabály szükséges a kinyerés előtt."
+    return stepper, btn_style, hint
+
+
+@callback(
+    Output("main-tabs", "value"),
+    Input("proceed-to-extract-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def proceed_to_extract(_):
+    return "tab-extract"
+
+
+@callback(
+    Output("extract-gate", "children"),
+    Input("rules-count-store", "data"),
+)
+def render_extract_gate(count):
+    if count:
+        return html.Div(style=CARD_STYLE, children=[
+            html.Div(
+                style={"display": "flex", "gap": "10px", "alignItems": "center"},
+                children=[
+                    dcc.Input(
+                        id="url-input", type="url",
+                        placeholder="https://hirportal.hu/...",
+                        debounce=False,
+                        style={
+                            "flex": "1", "padding": "10px 14px",
+                            "fontSize": "14px",
+                            "border": f"1px solid {COLORS['border']}",
+                            "borderRadius": "6px", "outline": "none",
+                        },
+                    ),
+                    html.Button(
+                        "Kinyerés", id="extract-btn", n_clicks=0,
+                        style={
+                            "padding": "10px 22px",
+                            "background": COLORS["primary"], "color": "#fff",
+                            "border": "none", "borderRadius": "6px",
+                            "cursor": "pointer", "fontWeight": "600",
+                            "fontSize": "14px", "whiteSpace": "nowrap",
+                        },
+                    ),
+                ],
+            ),
+            dcc.Loading(
+                id="loading", type="circle", color=COLORS["primary"],
+                children=html.Div(id="loading-anchor", style={"height": "4px"}),
+            ),
+        ])
+    return html.Div(
+        style={**CARD_STYLE, "borderLeft": f"4px solid {COLORS['partial']}", "textAlign": "center", "padding": "40px 20px"},
+        children=[
+            html.Div("⚠", style={"fontSize": "32px", "marginBottom": "12px"}),
+            html.Strong("Először konfigurálj szabályokat!", style={"fontSize": "16px", "color": COLORS["text"]}),
+            html.P(
+                "A kinyerési pipeline futtatásához legalább egy szabály szükséges. "
+                "Lépj az 1. Szabályok lapra és adj hozzá szabályokat.",
+                style={"color": COLORS["muted"], "marginTop": "8px", "marginBottom": "0"},
+            ),
+        ],
+    )
 
 
 @callback(
@@ -407,7 +511,8 @@ app.layout = html.Div(
 def trigger_extraction(n_clicks, url):
     if not n_clicks:
         return no_update, no_update, no_update
-    pr = run_test_with_rules((url or "").strip())
+    url = (url or "").strip()
+    pr = run_test_with_rules(url)
     return pr.modified_run, dataclasses.asdict(pr), ""
 
 
@@ -720,7 +825,7 @@ def create_rule_callback(n_clicks, name, scope, action, pattern, replacement,
     Input("rules-refresh-btn", "n_clicks"),
     prevent_initial_call=True,
 )
-def refresh_rules_table(n_clicks):
+def refresh_rules_table(_):
     return _build_rules_table()
 
 
@@ -764,7 +869,7 @@ def toggle_rule_callback(n_clicks_list):
     Input("suggestions-gen-btn", "n_clicks"),
     prevent_initial_call=True,
 )
-def generate_suggestions(n_clicks):
+def generate_suggestions(_):
     """Elemzi a validációs JSON-okat és feltölti a javaslatokat a store-ba."""
     suggestions = analyze_validations()
     serialized = [_dc.asdict(s) for s in suggestions]
