@@ -23,6 +23,13 @@ from src.rules import (
     RULES_DIR,
     analyze_validations,
 )
+from src.rules.preset import make_preset
+from src.rules.preset_storage import (
+    save_preset,
+    list_presets,
+    delete_preset,
+    apply_preset,
+)
 
 from src.ui.styling import (
     COLORS,
@@ -97,6 +104,48 @@ def _badge(text: str, color: str) -> html.Span:
         "padding": "2px 8px", "fontSize": "11px", "fontWeight": "600",
         "marginRight": "4px", "whiteSpace": "nowrap",
     })
+
+
+def _build_presets_table() -> list:
+    presets = list_presets()
+    if not presets:
+        return [html.P(
+            "Nincsenek mentett presetek.",
+            style={"color": COLORS["muted"], "fontSize": "14px", "margin": "0"},
+        )]
+    rows = []
+    for preset in presets:
+        created = preset.created_at[:10] if preset.created_at else "—"
+        rows.append(html.Div(
+            style={
+                **CARD_STYLE, "marginBottom": "8px",
+                "display": "flex", "alignItems": "center", "gap": "12px", "flexWrap": "wrap",
+            },
+            children=[
+                html.Div(style={"flex": "1", "minWidth": "150px"}, children=[
+                    html.Strong(preset.name, style={"fontSize": "14px", "color": COLORS["text"]}),
+                    html.Span(
+                        f"  {len(preset.rules)} szabály · {created}",
+                        style={"fontSize": "12px", "color": COLORS["muted"], "marginLeft": "8px"},
+                    ),
+                ]),
+                html.Div(style={"display": "flex", "gap": "6px", "flexShrink": "0"}, children=[
+                    html.Button(
+                        "Betöltés",
+                        id={"type": "preset-load-btn", "index": preset.id},
+                        n_clicks=0,
+                        style={**_BTN_SMALL, "background": COLORS["primary"], "color": "#fff"},
+                    ),
+                    html.Button(
+                        "Törlés",
+                        id={"type": "preset-delete-btn", "index": preset.id},
+                        n_clicks=0,
+                        style={**_BTN_SMALL, "background": COLORS["failed"], "color": "#fff"},
+                    ),
+                ]),
+            ],
+        ))
+    return rows
 
 
 def _build_rules_table() -> list:
@@ -270,6 +319,55 @@ app.layout = html.Div(
                             html.Div(id="suggestions-section"),
                         ]),
 
+                        # ── Presetek ──
+                        html.Div(style={**CARD_STYLE, "borderLeft": f"4px solid #6f42c1"}, children=[
+                            html.H3("Presetek", style={"margin": "0 0 12px", "fontSize": "16px", "color": COLORS["text"]}),
+                            html.P(
+                                "Mentsd el az aktuális szabálykészletet névvel ellátott presetként, "
+                                "hogy később összehasonlíthasd különböző konfigurációk teljesítményét.",
+                                style={"color": COLORS["muted"], "fontSize": "13px", "margin": "0 0 12px"},
+                            ),
+                            html.Div(
+                                style={"display": "flex", "gap": "10px", "alignItems": "center", "marginBottom": "16px"},
+                                children=[
+                                    dcc.Input(
+                                        id="preset-name-input", type="text",
+                                        placeholder="Preset neve...",
+                                        style={**_INPUT_STYLE, "width": "260px", "flex": "0 0 auto"},
+                                    ),
+                                    html.Button(
+                                        "Mentés presetként",
+                                        id="save-preset-btn", n_clicks=0,
+                                        style={**_BTN_SMALL, "background": "#6f42c1", "color": "#fff",
+                                               "fontSize": "13px", "padding": "6px 14px"},
+                                    ),
+                                    html.Span(id="preset-save-status", style={"fontSize": "13px", "color": COLORS["muted"]}),
+                                ],
+                            ),
+                            html.Div(id="presets-table", children=_build_presets_table()),
+                            # Confirmation bar (hidden until Load is clicked)
+                            html.Div(
+                                id="preset-load-confirm",
+                                style={"display": "none", "marginTop": "12px",
+                                       "background": "#fff3cd", "border": "1px solid #ffc107",
+                                       "borderRadius": "6px", "padding": "10px 14px",
+                                       "fontSize": "13px", "color": "#664d03"},
+                                children=[
+                                    html.Span(id="preset-load-confirm-text", style={"marginRight": "16px"}),
+                                    html.Button(
+                                        "Igen, betöltöm",
+                                        id="preset-load-confirm-btn", n_clicks=0,
+                                        style={**_BTN_SMALL, "background": COLORS["primary"], "color": "#fff", "marginRight": "8px"},
+                                    ),
+                                    html.Button(
+                                        "Mégse",
+                                        id="preset-load-cancel-btn", n_clicks=0,
+                                        style={**_BTN_SMALL, "background": COLORS["muted"], "color": "#fff"},
+                                    ),
+                                ],
+                            ),
+                        ]),
+
                         html.Div(style={**CARD_STYLE, "borderLeft": f"4px solid {COLORS['primary']}"}, children=[
                             html.H3("Új szabály", style={"margin": "0 0 16px", "fontSize": "16px", "color": COLORS["text"]}),
 
@@ -372,6 +470,8 @@ app.layout = html.Div(
                     selected_style=_TAB_SELECTED,
                     children=[html.Div(style={"paddingTop": "16px"}, children=[
 
+                        html.Div(id="active-preset-indicator", style={"marginBottom": "8px"}),
+
                         html.Div(id="extract-gate"),
 
                         html.Div(id="results-section"),
@@ -409,10 +509,12 @@ app.layout = html.Div(
             ],
         ),
 
-        dcc.Store(id="run-result-store",      storage_type="memory"),
-        dcc.Store(id="pipeline-result-store", storage_type="memory"),
-        dcc.Store(id="suggestions-store",     storage_type="memory", data=[]),
-        dcc.Store(id="rules-count-store",     storage_type="memory", data=len(list_rules())),
+        dcc.Store(id="run-result-store",        storage_type="memory"),
+        dcc.Store(id="pipeline-result-store",   storage_type="memory"),
+        dcc.Store(id="suggestions-store",       storage_type="memory", data=[]),
+        dcc.Store(id="rules-count-store",       storage_type="memory", data=len(list_rules())),
+        dcc.Store(id="presets-store",           storage_type="memory", data=[]),
+        dcc.Store(id="pending-load-preset-id",  storage_type="memory", data=None),
     ],
 )
 
@@ -938,6 +1040,132 @@ def dismiss_suggestion(n_clicks_list, suggestions):
         return no_update
     sid = ctx.triggered_id["index"]
     return [s for s in suggestions if s["id"] != sid]
+
+
+def _detect_active_preset() -> str | None:
+    current_ids = {p.stem for p in list_rules()}
+    for preset in list_presets():
+        preset_ids = {r["id"] for r in preset.rules}
+        if current_ids == preset_ids:
+            return preset.name
+    return None
+
+
+@callback(
+    Output("active-preset-indicator", "children"),
+    Input("rules-count-store", "data"),
+    Input("pending-load-preset-id", "data"),
+)
+def update_preset_indicator(_count, _pending):
+    name = _detect_active_preset()
+    if name:
+        label = f"Aktív preset: {name}"
+        style = {"color": "#6f42c1", "fontWeight": "600"}
+    else:
+        label = "Custom (nem preset)"
+        style = {"color": COLORS["muted"]}
+    return html.Span(label, style={"fontSize": "13px", **style})
+
+
+# ---------------------------------------------------------------------------
+# Preset callbacks
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("presets-table", "children"),
+    Output("preset-save-status", "children"),
+    Output("preset-name-input", "value"),
+    Input("save-preset-btn", "n_clicks"),
+    State("preset-name-input", "value"),
+    prevent_initial_call=True,
+)
+def save_preset_callback(n_clicks, name):
+    if not n_clicks:
+        return no_update, no_update, no_update
+    name = (name or "").strip()
+    if not name:
+        return no_update, _err("A preset neve kötelező."), no_update
+    rules = [load_rule(p) for p in list_rules()]
+    preset = make_preset(name, rules)
+    try:
+        save_preset(preset)
+    except Exception as exc:
+        return no_update, _err(f"Mentési hiba: {exc}"), no_update
+    status = html.Span(
+        f"✓ Preset mentve: \"{preset.name}\" ({len(preset.rules)} szabály)",
+        style={"color": "#6f42c1", "fontSize": "13px", "fontWeight": "600"},
+    )
+    return _build_presets_table(), status, ""
+
+
+@callback(
+    Output("presets-table", "children", allow_duplicate=True),
+    Input({"type": "preset-delete-btn", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def delete_preset_callback(n_clicks_list):
+    triggered = ctx.triggered_id
+    if not triggered or not any(n_clicks_list):
+        return no_update
+    delete_preset(triggered["index"])
+    return _build_presets_table()
+
+
+@callback(
+    Output("preset-load-confirm", "style"),
+    Output("preset-load-confirm-text", "children"),
+    Output("pending-load-preset-id", "data"),
+    Input({"type": "preset-load-btn", "index": ALL}, "n_clicks"),
+    Input("preset-load-cancel-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_load_confirm(load_clicks, _):
+    triggered = ctx.triggered_id
+    if triggered == "preset-load-cancel-btn" or not triggered:
+        return {"display": "none"}, no_update, None
+    if not any(load_clicks):
+        return no_update, no_update, no_update
+    preset_id = triggered["index"]
+    presets = list_presets()
+    preset = next((p for p in presets if p.id == preset_id), None)
+    if not preset:
+        return no_update, no_update, no_update
+    confirm_style = {
+        "display": "block", "marginTop": "12px",
+        "background": "#fff3cd", "border": "1px solid #ffc107",
+        "borderRadius": "6px", "padding": "10px 14px",
+        "fontSize": "13px", "color": "#664d03",
+    }
+    text = f"Biztosan betöltöd a \"{preset.name}\" presetet? Az összes jelenlegi szabály felülíródik."
+    return confirm_style, text, preset_id
+
+
+@callback(
+    Output("rules-table", "children", allow_duplicate=True),
+    Output("presets-table", "children", allow_duplicate=True),
+    Output("preset-load-confirm", "style", allow_duplicate=True),
+    Output("preset-save-status", "children", allow_duplicate=True),
+    Output("pending-load-preset-id", "data", allow_duplicate=True),
+    Input("preset-load-confirm-btn", "n_clicks"),
+    State("pending-load-preset-id", "data"),
+    prevent_initial_call=True,
+)
+def confirm_load_preset(n_clicks, preset_id):
+    if not n_clicks or not preset_id:
+        return no_update, no_update, no_update, no_update, no_update
+    presets = list_presets()
+    preset = next((p for p in presets if p.id == preset_id), None)
+    if not preset:
+        return no_update, no_update, {"display": "none"}, _err("Preset nem található."), None
+    try:
+        apply_preset(preset)
+    except Exception as exc:
+        return no_update, no_update, {"display": "none"}, _err(f"Betöltési hiba: {exc}"), None
+    status = html.Span(
+        f"✓ Preset betöltve: \"{preset.name}\"",
+        style={"color": COLORS["success"], "fontSize": "13px", "fontWeight": "600"},
+    )
+    return _build_rules_table(), _build_presets_table(), {"display": "none"}, status, None
 
 
 def _err(msg: str) -> html.Span:
